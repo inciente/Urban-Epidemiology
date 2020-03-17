@@ -1,0 +1,24 @@
+act_redux,Classification (SCIAN),TAS category
+11,Agriculture and livestock,Primary
+21,Mining,Primary
+22,"Production and distribution of water, energy and natural gas",Primary
+23,Construction,Industry
+31,Manufacturing,Industry
+32,Manufacturing,Industry
+33,Manufacturing,Industry
+43,Wholesale trade,Industry
+46,Retail,Retail
+48,"Transportation, shipping and storage",Industry
+49,"Transportation, shipping and storage",Industry
+51,Massive media,Industry
+52,Financial services and insurance,Services
+53,Real Estate,Services
+54,Professional Services,Services
+55,Corporate offices,Services
+56,Waste management and operational support,Services
+61,Education,Services
+62,Health services,Services
+71,Sports and cultural services,Services
+72,Hotels and restaurants,Services
+81,Other services,Services
+93,Government,Services
