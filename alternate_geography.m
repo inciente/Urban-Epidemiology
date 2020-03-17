@@ -1,13 +1,26 @@
-clc
-clear all
+function epidemic = alternate_geography(spatial_TAS, spatial_DENS, expop, extrip, in_cond)
 
-% Master script to setup and run epidemiological simulations. 
-% You will need to load a city.mat file (you can generate your own using
-% the scripts in the Demography folder) or create an analogue with the
-% variables for your region of interest.
 
-this_path = pwd; 
-addpath([this_path,'/Demography']);
+% Run large amounts of epidemiological simulations varying the spatial
+% structure and inequalities of a city. 
+% spatial_TAS = 0   to use spatial distribution of TAS from city.mat
+%             = 1   to randomnize spatial distribution
+
+
+% spatial_DENS= 0   to use spatial distribution of people from city.mat
+%             = 1   to randomnize distribution of people
+%             = 2   to sort density as TAS
+
+
+% expop and extrip are used to re-allocate housing and trip destinations
+% respectively. values < 1 reduce Gini coefficient, 1 keeps it constant,
+% and values > 1 increase Gini coefficient.
+
+%in_cond is the number of initial conditions you want to test for each
+%configuration. I suggest somewhere between 10 and 50, unless you're not
+%concerned about running time. This only impacts our estimate of the
+%attack rate, which tends to be stable anyway.
+
 %% SET UP DISEASE PARAMETERS
 
 infected.beta.adult = 1.25e-5;
@@ -16,25 +29,94 @@ infected.gamma = 1/4;
 
 infected.isolation = 0.8; %coefficient alpha to reduce infected mobility
 infected.vishosp = 0.08; %probability of visit to hospital during infective period
-infected.bed = 0.03; %probability of being hospitalized after visiting (for calibration purposes)
+infected.bed = 0.02; %probability of being hospitalized after visiting (for calibration purposes)
 
 infected.t0 = 15; %number of infecteds at time of onset
-infected.age = 0; %is patient zero an adult (0) or a child (1)?
+infected.age = 1; %is patient zero an adult (0) or a child (1)?
 
-in_cond = 15; %number of initial conditions you want to test 
-ndays = 250; %number of days you wish to simulate
+ndays = 350; %number of days you wish to simulate
 
 
 load('city.mat');
 load('malla892nod.mat');
-%load('mobility.mat');
 
 
-offset = 45; % time offset (days) to plot between simulation results and data
+%% MODIFY GEOGRAPHY
+
+pobtot.child  = sum(city.child);
+pobtot.adult  = sum(city.adult);
+
+%Modify the spatial structure of the city?
+
+if spatial_TAS == 1
+    
+    %Randomnize TAS
+    city.TAS_adult = city.TAS_adult(randperm(length(city.xy)));
+    city.TAS_child = city.TAS_child(randperm(length(city.xy)));   
+    
+end
+
+if spatial_DENS == 1
+    
+    %Randomnize density and distribution of children.
+    city.density = city.density(randperm(length(city.xy)));
+    city.childratio = city.childratio(randperm(length(city.xy)));
+ 
+    city.adult = (1 - city.childratio).*city.density.*city.area;
+    city.child = city.childratio.*city.density.*city.area;
+    
+    %Preserve size of populations
+    city.adult = city.adult*pobtot.adult/sum(city.adult);
+    city.child = city.child*pobtot.child/sum(city.child);
+    
+    %Update other variables 
+    city.population = city.adult + city.child;
+    city.density = city.population./ city.area; 
+    
+end
+
+    
+if spatial_DENS == 2
+    
+    [dummy, sort_tas_adult] = sort(city.TAS_adult);
+    [dummy, sort_tas_child] = sort(city.TAS_child);
+    
+    [dummy, sort_dens_adult] = sort(city.adult./city.area);
+    [dummy, sort_dens_child] = sort(city.child./city.area);
+    
+    %Give high adult density to neighborhoods with high adult TAS
+    city.adult(sort_tas_adult) = city.adult(sort_dens_adult)./city.area(sort_dens_adult);
+    city.adult = city.adult.*city.area;
+    
+    city.child(sort_tas_child) = city.child(sort_dens_child)./city.area(sort_dens_child);
+    city.child = city.child.*city.area;
+    
+    %Preserve size of population
+    city.adult = city.adult * pobtot.adult/sum(city.adult);
+    city.child = city.child * pobtot.child/sum(city.child);
+    
+end
+
+if extrip ~= 1
+    % Change the degrees of inequality:
+    city.TAS_adult = rescale_demo(city.TAS_adult,extrip);
+    city.TAS_child = rescale_demo(city.TAS_child, extrip);
+end
+
+if expop ~= 1
+    city.child = rescale_demo(city.child, expop);
+    city.adult = rescale_demo(city.adult, expop);
+end
+
+
+city.population = city.child + city.adult;
+city.density = city.population./city.area;
+city.childratio = city.child./city.population;
+
 
 %% GET MOBILITY - COMMENT OUT IF YOU ALREADY HAVE OD MATRICES
 
-clear mob
+%%% clear mob
 
 %First of all, we create a matrix of distances between centroids of all our
 %grid elements.
@@ -92,8 +174,6 @@ end
 
 clear r_xy nancheck k hospital  dist corresp in
 
-save('mobility.mat','mob');
-
 
 %% RUN SIMULATION 
 
@@ -128,6 +208,13 @@ R_0.child = (infected.ODchild*(susc_city.*infected.beta.child))/infected.gamma;
 R_0.mean_adult = gather(sum(R_0.adult.*city.adult)/sum(city.adult));
 R_0.mean_child = gather(sum(R_0.child.*city.child)/sum(city.child));
 
+% %Calculate second-generation R_0
+% susc_city = (mob.ODadult')*(city.adult.*R_0.adult) + ...
+%     (mob.ODchild')*(city.child.*R_0.child);
+% 
+% R_0.dob_adult = (infected.ODadult*(susc_city.*infected.beta.adult))./infected.gamma; 
+% R_0.dob_child = (infected.ODchild*(susc_city.*infected.beta.child))/infected.gamma;
+
 
 % Create arrays to store solution
 Solution = NaN(in_cond, ndays); 
@@ -138,10 +225,10 @@ c_cases(:,1) = infected.t0;
 
 %New Hospitalizations: %First column for adults, second for children.
 hosp_new = NaN(in_cond, ndays,2); 
-attack_rate_adult = zeros(1580, in_cond); 
-attack_rate_child = zeros(1580, in_cond);
+%attack_rate_adult = zeros(1580, in_cond); 
+%attack_rate_child = zeros(1580, in_cond);
 
-tic
+
 %Begin simulation and cycle through all possible origins of epidemic
 for origin=1:in_cond
     
@@ -192,10 +279,6 @@ for origin=1:in_cond
         %Change in number of infected individuals over this timestep
         di_Adult = S_trip_Adult*(I_map); 
         di_Children = S_trip_Children*(I_map); 
-
-        %Number of recovered people: 
-        SIR_Adult(:,3) = SIR_Adult(:,3) + infected.gamma*SIR_Adult(:,2); 
-        SIR_Children(:,3) = SIR_Children(:,3) + infected.gamma*SIR_Children(:,2);
         
         SIR_Adult(:,1) = SIR_Adult(:,1) - di_Adult; 
         SIR_Adult(:,2) = SIR_Adult(:,2) + di_Adult - ...
@@ -205,6 +288,9 @@ for origin=1:in_cond
         SIR_Children(:,2) = SIR_Children(:,2) + di_Children - ...
             infected.gamma*SIR_Children(:,2); 
        
+        %Number of recovered people: 
+        SIR_Adult(:,3) = SIR_Adult(:,3) + infected.gamma*SIR_Adult(:,2); 
+        SIR_Children(:,3) = SIR_Children(:,3) + infected.gamma*SIR_Children(:,2);
         
         SIR_Children(SIR_Children < 0) = 0; 
         SIR_Adult(SIR_Adult < 0) = 0;
@@ -214,14 +300,14 @@ for origin=1:in_cond
         Solution(origin, time) = gather(sum(SIR_Adult(:,2) + SIR_Children(:,2)));
         
         %CUmulative cases since beginning of epidemic
-         c_cases(origin, time+1) = gather(sum(di_Adult) + sum(di_Children) ...
-             + c_cases(origin, time));
+        c_cases(origin, time+1) = gather(sum(di_Adult) + sum(di_Children) ...
+            + c_cases(origin, time));
         
-       attack_rate_adult(:,origin) = attack_rate_adult(:,origin) + ...
-           gather(di_Adult)./city.adult;
-       
-       attack_rate_child(:,origin) = attack_rate_child(:,origin) + ...
-           gather(di_Children)./city.child;
+%        attack_rate_adult(:,origin) = attack_rate_adult(:,origin) + ...
+%            gather(di_Adult)./city.adult;
+%        
+%        attack_rate_child(:,origin) = attack_rate_child(:,origin) + ...
+%            gather(di_Children)./city.child;
         
         
         
@@ -245,51 +331,27 @@ for origin=1:in_cond
     
     hosp_new(origin,:,:) = hosp_new2;
     
-end
 
-toc
+end
+ 
+
 
 clear susc_city I_map S_trip_Adult S_trip_Children 
 clear di_Adult di_Children 
 
 
-%% COMPARE RESULTS TO 2009 DATA
+gini_o = Gini_curve(city.population, city.area);
 
+work_hours = mob.ODadult'*city.adult + mob.ODchild'*city.child;
+gini_d = Gini_curve(work_hours, city.area);
 
+epidemic.R_0_child = gather([min(R_0.child), R_0.mean_child, max(R_0.child)]);
+epidemic.R_0_adult = gather([min(R_0.adult), R_0.mean_adult, max(R_0.adult)]);
 
-load AH1N1_data.mat
+epidemic.attack_rate = mean(c_cases(:,end))./sum(city.population);
 
-figure(1);
-
-set(0,'DefaultAxesFontsize',18);
-
-
-hold on;
-
-for i=1:in_cond
-    
-    
-curveHosp=hosp_new(i,:,1)+hosp_new(i,:,2);
-
-plot(linspace(1,length(curveHosp),length(curveHosp)),curveHosp, ...
-    'Color',[1 1 1]*0.45)
-hold on
-
-end
-
-line1=plot((7:7:33*7) - offset,data,'bx');
-set(line1,'markerSize',12,'LineWidth',2);
-
-axis([0 33*7+20 0 100])
-
-xlabel('Time (days)')
-ylabel('New hospitalizations')
-
-%save('results-calibration_Feb18.mat','-mat')
-
-
-
-R_0
+epidemic.gini_o = gini_o.coeff;
+epidemic.gini_d = gather(gini_d.coeff);
 
 
 
