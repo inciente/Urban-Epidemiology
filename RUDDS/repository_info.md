@@ -1,0 +1,1 @@
+The zip file in this repository (RUDDS_Soft_R1.zip) includes all scripts necessary to process census, economic and school data to run epidemiological simulations in Guadalajara (GDL, Western Mexico). 
